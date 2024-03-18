@@ -72,7 +72,7 @@ type Record struct {
 
 // Answer represents a DNS message answer section.
 type Answer struct {
-	records []Record
+	Records []Record
 }
 
 // Message represents a DNS message.
@@ -92,6 +92,26 @@ func NewRequest(b []byte) Message {
 	m.Header.ANCOUNT = binary.BigEndian.Uint16(b[6:8])
 	m.Header.NSCOUNT = binary.BigEndian.Uint16(b[8:10])
 	m.Header.ARCOUNT = binary.BigEndian.Uint16(b[10:12])
+	// Question section.
+	var i int
+	m.Question.Name, i = decodeDomainName(b, 12)
+	m.Question.Type = binary.BigEndian.Uint16(b[i : i+2])
+	m.Question.Class = binary.BigEndian.Uint16(b[i+2 : i+4])
+	// Answer section.
+	m.Answer = Answer{Records: make([]Record, m.Header.ANCOUNT)}
+	for j := 0; j < int(m.Header.ANCOUNT); j++ {
+		m.Answer.Records[j].Name, i = decodeDomainName(b, i)
+		m.Answer.Records[j].Type = binary.BigEndian.Uint16(b[i : i+2])
+		m.Answer.Records[j].Class = binary.BigEndian.Uint16(b[i+2 : i+4])
+		m.Answer.Records[j].TTL = binary.BigEndian.Uint32(b[i+4 : i+8])
+		m.Answer.Records[j].Len = binary.BigEndian.Uint16(b[i+8 : i+10])
+		m.Answer.Records[j].Data = make([]byte, m.Answer.Records[j].Len)
+		i += 10
+		for k := 0; k < int(m.Answer.Records[j].Len); k++ {
+			m.Answer.Records[j].Data[k] = b[i+k]
+		}
+		i += int(m.Answer.Records[j].Len)
+	}
 	return m
 }
 
@@ -117,14 +137,14 @@ func NewResponse(r Message) Message {
 			ARCOUNT: 0,
 		},
 		Question: Question{
-			Name:  "codecrafters.io",
+			Name:  r.Question.Name,
 			Type:  TYPE_A,
 			Class: CLASS_IN,
 		},
 		Answer: Answer{
 			[]Record{
 				{
-					Name:  "codecrafters.io",
+					Name:  r.Question.Name,
 					Type:  TYPE_A,
 					Class: CLASS_IN,
 					TTL:   60,
@@ -134,6 +154,20 @@ func NewResponse(r Message) Message {
 			},
 		},
 	}
+}
+
+func decodeDomainName(b []byte, start int) (string, int) {
+	var sb strings.Builder
+	i := start
+	for b[i] != 0 {
+		n := int(b[i])
+		sb.Write(b[i+1 : i+1+n])
+		i += n + 1
+		if b[i] != 0 {
+			sb.WriteByte('.')
+		}
+	}
+	return sb.String(), i + 1
 }
 
 func encodeDomainName(name string) []byte {
@@ -163,7 +197,7 @@ func (m Message) Byte() []byte {
 	b = binary.BigEndian.AppendUint16(b, m.Question.Type)
 	b = binary.BigEndian.AppendUint16(b, m.Question.Class)
 	// Answer section.
-	for _, record := range m.Answer.records {
+	for _, record := range m.Answer.Records {
 		b = append(b, encodeDomainName(record.Name)...)
 		b = binary.BigEndian.AppendUint16(b, record.Type)
 		b = binary.BigEndian.AppendUint16(b, record.Class)
