@@ -59,10 +59,26 @@ type Question struct {
 	Class uint16 // Class code
 }
 
+// Record represents a single Resource Record (RR).
+type Record struct {
+	Name  string // Domain name
+	Type  uint16 // Record type
+	Class uint16 // Class code
+	TTL   uint32 // Time-to-live
+	Len   uint16 // Data length
+	Data  []byte // Data specific to the record type
+}
+
+// Answer represents a DNS message answer section.
+type Answer struct {
+	records []Record
+}
+
 // Message represents a DNS message.
 type Message struct {
 	Header
 	Question
+	Answer
 }
 
 // NewMessage constructs a new DNS message.
@@ -72,7 +88,7 @@ func NewMessage() Message {
 			ID:      1234,
 			Flag:    FLAG_QR,
 			QDCOUNT: 1,
-			ANCOUNT: 0,
+			ANCOUNT: 1,
 			NSCOUNT: 0,
 			ARCOUNT: 0,
 		},
@@ -80,6 +96,18 @@ func NewMessage() Message {
 			Name:  "codecrafters.io",
 			Type:  TYPE_A,
 			Class: CLASS_IN,
+		},
+		Answer: Answer{
+			[]Record{
+				{
+					Name:  "codecrafters.io",
+					Type:  TYPE_A,
+					Class: CLASS_IN,
+					TTL:   60,
+					Len:   4,
+					Data:  []byte{8, 8, 8, 8},
+				},
+			},
 		},
 	}
 }
@@ -110,5 +138,14 @@ func (m Message) Byte() []byte {
 	b = append(b, encodeDomainName(m.Question.Name)...)
 	b = binary.BigEndian.AppendUint16(b, m.Question.Type)
 	b = binary.BigEndian.AppendUint16(b, m.Question.Class)
+	// Answer section.
+	for _, record := range m.Answer.records {
+		b = append(b, encodeDomainName(record.Name)...)
+		b = binary.BigEndian.AppendUint16(b, record.Type)
+		b = binary.BigEndian.AppendUint16(b, record.Class)
+		b = binary.BigEndian.AppendUint32(b, record.TTL)
+		b = binary.BigEndian.AppendUint16(b, record.Len)
+		b = append(b, record.Data...)
+	}
 	return b
 }
