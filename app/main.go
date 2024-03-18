@@ -28,10 +28,11 @@ func main() {
 			log.Fatal("Error receiving data:", err)
 		}
 
-		receivedData := string(buf[:size])
+		receivedData := buf[:size]
 		fmt.Printf("Received %d bytes from %s: %s\n", size, source, receivedData)
 
-		response := dns.NewMessage()
+		request := dns.NewRequest([]byte(receivedData))
+		response := dns.NewResponse(request)
 
 		_, err = udpConn.WriteToUDP(response.Byte(), source)
 		if err != nil {

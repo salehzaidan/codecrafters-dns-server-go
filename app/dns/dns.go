@@ -7,6 +7,7 @@ import (
 
 const (
 	FLAG_RCODE_NOERROR = 0       // Response Code (No Error)
+	FLAG_RCODE_NOTIMP  = 4       // Response Code (Not Implemented)
 	FLAG_Z             = 1 << 4  // Reserved
 	FLAG_RA            = 1 << 7  // Recursion Available
 	FLAG_RD            = 1 << 8  // Recursion Desired
@@ -81,12 +82,35 @@ type Message struct {
 	Answer
 }
 
-// NewMessage constructs a new DNS message.
-func NewMessage() Message {
+// NewRequest constructs a new DNS message from an incoming request.
+func NewRequest(b []byte) Message {
+	m := Message{}
+	// Header section.
+	m.Header.ID = binary.BigEndian.Uint16(b[0:2])
+	m.Header.Flag = binary.BigEndian.Uint16(b[2:4])
+	m.Header.QDCOUNT = binary.BigEndian.Uint16(b[4:6])
+	m.Header.ANCOUNT = binary.BigEndian.Uint16(b[6:8])
+	m.Header.NSCOUNT = binary.BigEndian.Uint16(b[8:10])
+	m.Header.ARCOUNT = binary.BigEndian.Uint16(b[10:12])
+	return m
+}
+
+// NewResponse constructs a new DNS message in response to an incoming request.
+func NewResponse(r Message) Message {
+	opcode := r.Header.Flag >> 11 & 0xF
+	opcodeFlag := opcode << 11
+	rd := r.Header.Flag >> 8 & 0x1
+	rdFlag := rd << 8
+	var rcodeFlag uint16
+	if opcode == 0 {
+		rcodeFlag = FLAG_RCODE_NOERROR
+	} else {
+		rcodeFlag = FLAG_RCODE_NOTIMP
+	}
 	return Message{
 		Header: Header{
-			ID:      1234,
-			Flag:    FLAG_QR,
+			ID:      r.Header.ID,
+			Flag:    FLAG_QR | opcodeFlag | rdFlag | rcodeFlag,
 			QDCOUNT: 1,
 			ANCOUNT: 1,
 			NSCOUNT: 0,
