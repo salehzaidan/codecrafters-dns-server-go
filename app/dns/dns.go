@@ -53,11 +53,16 @@ type Header struct {
 	ARCOUNT uint16 // Additional Count
 }
 
-// Question represents a DNS message question section.
-type Question struct {
+// Query represents a single question query.
+type Query struct {
 	Name  string // Domain name
 	Type  uint16 // Record type
 	Class uint16 // Class code
+}
+
+// Question represents a DNS message question section.
+type Question struct {
+	Queries []Query
 }
 
 // Record represents a single Resource Record (RR).
@@ -93,10 +98,14 @@ func NewRequest(b []byte) Message {
 	m.Header.NSCOUNT = binary.BigEndian.Uint16(b[8:10])
 	m.Header.ARCOUNT = binary.BigEndian.Uint16(b[10:12])
 	// Question section.
-	var i int
-	m.Question.Name, i = decodeDomainName(b, 12)
-	m.Question.Type = binary.BigEndian.Uint16(b[i : i+2])
-	m.Question.Class = binary.BigEndian.Uint16(b[i+2 : i+4])
+	i := headerSize
+	m.Question = Question{Queries: make([]Query, m.Header.QDCOUNT)}
+	for j := 0; j < int(m.Header.QDCOUNT); j++ {
+		m.Question.Queries[j].Name, i = decodeDomainName(b, i)
+		m.Question.Queries[j].Type = binary.BigEndian.Uint16(b[i : i+2])
+		m.Question.Queries[j].Class = binary.BigEndian.Uint16(b[i+2 : i+4])
+		i += 4
+	}
 	// Answer section.
 	m.Answer = Answer{Records: make([]Record, m.Header.ANCOUNT)}
 	for j := 0; j < int(m.Header.ANCOUNT); j++ {
@@ -127,45 +136,67 @@ func NewResponse(r Message) Message {
 	} else {
 		rcodeFlag = FLAG_RCODE_NOTIMP
 	}
-	return Message{
+	queries := make([]Query, r.Header.QDCOUNT)
+	for i := 0; i < int(r.Header.QDCOUNT); i++ {
+		queries[i] = Query{
+			Name:  r.Question.Queries[i].Name,
+			Type:  TYPE_A,
+			Class: CLASS_IN,
+		}
+	}
+	records := make([]Record, r.Header.QDCOUNT)
+	for i := 0; i < int(r.Header.QDCOUNT); i++ {
+		b := byte(i + 1)
+		records[i] = Record{
+			Name:  r.Question.Queries[i].Name,
+			Type:  TYPE_A,
+			Class: CLASS_IN,
+			TTL:   60,
+			Len:   4,
+			Data:  []byte{b, b, b, b},
+		}
+	}
+	m := Message{
 		Header: Header{
 			ID:      r.Header.ID,
 			Flag:    FLAG_QR | opcodeFlag | rdFlag | rcodeFlag,
-			QDCOUNT: 1,
-			ANCOUNT: 1,
+			QDCOUNT: r.Header.QDCOUNT,
+			ANCOUNT: r.Header.QDCOUNT,
 			NSCOUNT: 0,
 			ARCOUNT: 0,
 		},
-		Question: Question{
-			Name:  r.Question.Name,
-			Type:  TYPE_A,
-			Class: CLASS_IN,
-		},
-		Answer: Answer{
-			[]Record{
-				{
-					Name:  r.Question.Name,
-					Type:  TYPE_A,
-					Class: CLASS_IN,
-					TTL:   60,
-					Len:   4,
-					Data:  []byte{8, 8, 8, 8},
-				},
-			},
-		},
+		Question: Question{Queries: queries},
+		Answer:   Answer{Records: records},
 	}
+	return m
 }
 
 func decodeDomainName(b []byte, start int) (string, int) {
 	var sb strings.Builder
 	i := start
-	for b[i] != 0 {
-		n := int(b[i])
-		sb.Write(b[i+1 : i+1+n])
-		i += n + 1
-		if b[i] != 0 {
-			sb.WriteByte('.')
+	useCompression := false
+	for {
+		// Check if the compression pointer indicator exist.
+		p := binary.BigEndian.Uint16(b[i : i+2])
+		if p&0xC000 == 0xC000 {
+			useCompression = true
+			offset := p ^ 0xC000
+			name, _ := decodeDomainName(b, int(offset))
+			sb.WriteString(name)
+			i += 2
+		} else if b[i] != 0 {
+			n := int(b[i])
+			sb.Write(b[i+1 : i+1+n])
+			i += n + 1
+			if b[i] != 0 {
+				sb.WriteByte('.')
+			}
+		} else {
+			break
 		}
+	}
+	if useCompression {
+		return sb.String(), i
 	}
 	return sb.String(), i + 1
 }
@@ -193,9 +224,11 @@ func (m Message) Byte() []byte {
 	binary.BigEndian.PutUint16(b[8:10], m.Header.NSCOUNT)
 	binary.BigEndian.PutUint16(b[10:12], m.Header.ARCOUNT)
 	// Question section.
-	b = append(b, encodeDomainName(m.Question.Name)...)
-	b = binary.BigEndian.AppendUint16(b, m.Question.Type)
-	b = binary.BigEndian.AppendUint16(b, m.Question.Class)
+	for _, query := range m.Question.Queries {
+		b = append(b, encodeDomainName(query.Name)...)
+		b = binary.BigEndian.AppendUint16(b, query.Type)
+		b = binary.BigEndian.AppendUint16(b, query.Class)
+	}
 	// Answer section.
 	for _, record := range m.Answer.Records {
 		b = append(b, encodeDomainName(record.Name)...)
