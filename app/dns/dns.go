@@ -125,7 +125,7 @@ func NewRequest(b []byte) Message {
 }
 
 // NewResponse constructs a new DNS message in response to an incoming request.
-func NewResponse(r Message) Message {
+func NewResponse(r Message, forwarded bool) Message {
 	opcode := r.Header.Flag >> 11 & 0xF
 	opcodeFlag := opcode << 11
 	rd := r.Header.Flag >> 8 & 0x1
@@ -144,16 +144,21 @@ func NewResponse(r Message) Message {
 			Class: CLASS_IN,
 		}
 	}
-	records := make([]Record, r.Header.QDCOUNT)
-	for i := 0; i < int(r.Header.QDCOUNT); i++ {
-		b := byte(i + 1)
-		records[i] = Record{
-			Name:  r.Question.Queries[i].Name,
-			Type:  TYPE_A,
-			Class: CLASS_IN,
-			TTL:   60,
-			Len:   4,
-			Data:  []byte{b, b, b, b},
+	var records []Record
+	if forwarded {
+		records = r.Answer.Records
+	} else {
+		records = make([]Record, r.Header.QDCOUNT)
+		for i := 0; i < int(r.Header.QDCOUNT); i++ {
+			b := byte(i + 1)
+			records[i] = Record{
+				Name:  r.Question.Queries[i].Name,
+				Type:  TYPE_A,
+				Class: CLASS_IN,
+				TTL:   60,
+				Len:   4,
+				Data:  []byte{b, b, b, b},
+			}
 		}
 	}
 	m := Message{
@@ -167,6 +172,30 @@ func NewResponse(r Message) Message {
 		},
 		Question: Question{Queries: queries},
 		Answer:   Answer{Records: records},
+	}
+	return m
+}
+
+// SplitMessageQuestions splits the queries in the question section of the Message
+// into a slice of Message containing one query each.
+func SplitMessageQuestions(m Message) []Message {
+	msgs := make([]Message, m.QDCOUNT)
+	for i, query := range m.Question.Queries {
+		msg := m
+		msg.Header.QDCOUNT = 1
+		msg.Question.Queries = []Query{query}
+		msgs[i] = msg
+	}
+	return msgs
+}
+
+// MergeMessageAnswers merges the records in the answer section of each Message
+// in the slice into a single Message containing all of them.
+func MergeMessageAnswers(msgs []Message) Message {
+	m := msgs[0]
+	m.Header.ANCOUNT = uint16(len(msgs))
+	for _, msg := range msgs[1:] {
+		m.Answer.Records = append(m.Answer.Records, msg.Records...)
 	}
 	return m
 }
